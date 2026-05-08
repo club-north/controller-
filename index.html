@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="FPV Ctrl">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.png">
+    <title>FPV Controller</title>
+    <style>
+        * { user-select: none; -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body { margin: 0; background: #000; font-family: system-ui; overflow: hidden; position: fixed; width: 100%; height: 100%; }
+        .video-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 1; }
+        #remoteVideo { width: 100%; height: 100%; object-fit: cover; }
+        .overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); z-index: 20; display: flex; align-items: center; justify-content: center; flex-direction: column; color: white; text-align: center; padding: 20px; }
+        .overlay.hidden { display: none; }
+        .overlay input { width: 90%; padding: 12px; margin: 20px 0; border-radius: 30px; border: none; background: #2c2c44; color: white; text-align: center; font-size: 14px; }
+        .overlay button { background: #00a86b; padding: 12px 30px; border-radius: 30px; border: none; color: white; font-size: 16px; cursor: pointer; }
+        .controls { position: fixed; bottom: 0; left: 0; right: 0; z-index: 10; background: linear-gradient(to top, rgba(0,0,0,0.85), transparent); padding: 20px 16px 30px; }
+        .status-bar { display: flex; justify-content: space-between; background: rgba(15,15,26,0.9); padding: 10px 16px; border-radius: 30px; margin-bottom: 20px; flex-wrap: wrap; gap: 8px; }
+        .status { display: flex; align-items: center; gap: 8px; }
+        .led { width: 10px; height: 10px; border-radius: 50%; background: #ff3333; }
+        .led.on { background: #33ff33; box-shadow: 0 0 8px #33ff33; }
+        .status-text { color: white; font-size: 11px; font-weight: bold; }
+        button { background: #2c2c44; border: none; color: white; padding: 6px 14px; border-radius: 30px; font-size: 11px; cursor: pointer; }
+        .connect-btn { background: #00a86b; }
+        .disconnect-btn { background: #c41e3a; }
+        .speed-panel { background: rgba(10,10,18,0.8); border-radius: 30px; padding: 10px 16px; margin-bottom: 16px; }
+        .speed-label { display: flex; justify-content: space-between; color: #ccc; font-size: 11px; margin-bottom: 6px; }
+        input[type="range"] { width: 100%; height: 4px; -webkit-appearance: none; background: #2c2c44; border-radius: 10px; }
+        input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; background: #00a86b; border-radius: 50%; cursor: pointer; border: 2px solid white; }
+        .dpad { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; max-width: 220px; margin: 0 auto; }
+        .pad-btn { background: rgba(30,30,50,0.95); border-radius: 50px; text-align: center; padding: 14px 0; font-size: 26px; color: white; cursor: pointer; box-shadow: 0 5px 0 rgba(0,0,0,0.3); }
+        .pad-btn:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0,0,0,0.3); }
+        .stop-btn { background: #c41e3a; }
+        .emergency { width: 100%; background: #ff4444; padding: 12px; font-size: 16px; border-radius: 50px; margin-top: 12px; font-weight: bold; }
+        .info { text-align: center; color: #aaa; font-size: 9px; margin-top: 12px; }
+        .debug { position: fixed; bottom: 5px; left: 5px; right: 5px; font-size: 8px; color: #888; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 8px; z-index: 15; font-family: monospace; text-align: center; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div class="video-container"><video id="remoteVideo" autoplay playsinline></video></div>
+    <div class="overlay" id="cameraOverlay">
+        <h2>📡 車載カメラ接続</h2>
+        <p>車載カメラの接続コードを入力</p>
+        <input type="text" id="connectionCode" placeholder="接続コードを貼り付け">
+        <button id="connectCameraBtn">🔗 接続する</button>
+        <p style="font-size:12px; margin-top:20px;">💡 車載カメラアプリで表示される<br>コードをコピーして貼り付け</p>
+    </div>
+    <div class="controls">
+        <div class="status-bar">
+            <div class="status"><div class="led" id="carLed"></div><span class="status-text" id="carStatus">📷 カメラ待機</span></div>
+            <div class="status"><div class="led" id="bitLed"></div><span class="status-text" id="bitStatus">🎮 micro:bit未接続</span></div>
+            <div><button id="connectBitBtn" class="connect-btn">micro:bit接続</button><button id="disconnectBitBtn" class="disconnect-btn" disabled>切断</button></div>
+        </div>
+        <div class="speed-panel"><div class="speed-label"><span>🐢</span><span id="speedValue">2</span><span>🐇</span></div><input type="range" id="speedSlider" min="0" max="4" step="1" value="2"></div>
+        <div class="dpad"><div></div><div class="pad-btn" data-dir="UP">▲</div><div></div><div class="pad-btn" data-dir="LEFT">◀</div><div class="pad-btn stop-btn" data-dir="STOP">■</div><div class="pad-btn" data-dir="RIGHT">▶</div><div></div><div class="pad-btn" data-dir="DOWN">▼</div><div></div></div>
+        <button id="emergencyStop" class="emergency">🛑 緊急停止</button>
+        <div class="info">⚡ 押し続けると連続送信</div>
+    </div>
+    <div class="debug" id="debugInfo">⚡ FPV Controller 起動</div>
+    <script>
+        (function(){
+            // ===== WebRTC（カメラ受信）=====
+            let peerConnection = null;
+            const remoteVideo = document.getElementById("remoteVideo");
+            const cameraOverlay = document.getElementById("cameraOverlay");
+            const carLed = document.getElementById("carLed");
+            const carStatus = document.getElementById("carStatus");
+            const connectionCodeInput = document.getElementById("connectionCode");
+            const connectCameraBtn = document.getElementById("connectCameraBtn");
+            
+            function saveCode(code){ if(code) localStorage.setItem('camera_code', code); }
+            function loadCode(){ return localStorage.getItem('camera_code'); }
+            
+            async function connectCamera(code){
+                try{
+                    const data = JSON.parse(atob(code));
+                    if(peerConnection) peerConnection.close();
+                    peerConnection = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+                    peerConnection.ontrack = (e) => {
+                        remoteVideo.srcObject = e.streams[0];
+                        cameraOverlay.classList.add("hidden");
+                        carLed.classList.add("on");
+                        carStatus.innerHTML = "📹 映像受信中";
+                        debugLog("✅ カメラ接続成功");
+                    };
+                    peerConnection.oniceconnectionstatechange = () => {
+                        if(peerConnection.iceConnectionState === "disconnected"){
+                            carLed.classList.remove("on");
+                            carStatus.innerHTML = "⚠️ カメラ切断";
+                            cameraOverlay.classList.remove("hidden");
+                        }
+                    };
+                    await peerConnection.setRemoteDescription({type:data.type, sdp:data.sdp});
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+                    saveCode(code);
+                }catch(e){ debugLog("❌ カメラ接続エラー: "+e.message, true); }
+            }
+            
+            const saved = loadCode();
+            if(saved){ connectionCodeInput.value = saved; setTimeout(()=>connectCamera(saved), 500); }
+            connectCameraBtn.onclick = () => { const c = connectionCodeInput.value.trim(); if(c) connectCamera(c); else alert("コードを入力してください"); };
+            
+            // ===== micro:bit BLE制御 =====
+            const UART_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+            let device=null, writeChar=null, connected=false;
+            const bitLed = document.getElementById("bitLed"), bitStatus = document.getElementById("bitStatus");
+            const connectBitBtn = document.getElementById("connectBitBtn"), disconnectBitBtn = document.getElementById("disconnectBitBtn");
+            const emergencyStopBtn = document.getElementById("emergencyStop");
+            let queue=[], sending=false;
+            
+            function debugLog(msg, isErr=false){
+                const time = new Date().toLocaleTimeString();
+                const d = document.getElementById("debugInfo");
+                d.innerHTML = `[${time}] ${msg}`;
+                d.style.color = isErr ? '#ff8888' : '#88ff88';
+                setTimeout(()=>{ if(d.innerHTML === `[${time}] ${msg}`) d.style.color = '#888'; }, 3000);
+            }
+            
+            function updateBitUI(state){
+                if(state){
+                    bitLed.classList.add("on");
+                    bitStatus.innerHTML = "🎮 micro:bit接続中";
+                    connectBitBtn.disabled = true;
+                    disconnectBitBtn.disabled = false;
+                }else{
+                    bitLed.classList.remove("on");
+                    bitStatus.innerHTML = "🎮 micro:bit未接続";
+                    connectBitBtn.disabled = false;
+                    disconnectBitBtn.disabled = true;
+                }
+            }
+            
+            async function write(data){
+                if(!writeChar || !connected) return false;
+                try{ await writeChar.writeValue(data); return true; }catch(e){ return false; }
+            }
+            async function processQueue(){
+                if(sending) return;
+                if(queue.length===0) return;
+                if(!connected || !writeChar){ queue=[]; return; }
+                sending = true;
+                const cmd = queue.shift();
+                try{ await write(new TextEncoder().encode(cmd)); }catch(e){}
+                sending = false;
+                setTimeout(processQueue, 50);
+            }
+            function sendCmd(cmd){ if(!connected || !writeChar) return; queue.push(cmd+"\n"); processQueue(); }
+            function emergency(){
+                if(!connected) return;
+                debugLog("🛑 緊急停止");
+                sendCmd("up"); sendCmd("down"); sendCmd("left"); sendCmd("right");
+            }
+            
+            async function connectBit(){
+                if(connected) return;
+                if(!navigator.bluetooth){ alert("Chromeが必要です"); return; }
+                try{
+                    debugLog("🔍 micro:bit検索中...");
+                    device = await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:[UART_SERVICE]});
+                    debugLog("✅ 選択: "+ (device.name||"micro:bit"));
+                    device.addEventListener("gattserverdisconnected",()=>{
+                        debugLog("🔌 micro:bit切断", true);
+                        connected=false; writeChar=null; updateBitUI(false); queue=[];
+                    });
+                    const server = await device.gatt.connect();
+                    const service = await server.getPrimaryService(UART_SERVICE);
+                    const chars = await service.getCharacteristics();
+                    for(const c of chars){
+                        if(c.properties.write || c.properties.writeWithoutResponse){ writeChar=c; break; }
+                    }
+                    if(!writeChar) throw new Error("書き込み不可");
+                    connected=true; updateBitUI(true);
+                    debugLog("🎮 micro:bit接続成功！");
+                    setTimeout(()=>{
+                        if(connected){
+                            emergency();
+                            const sp = document.getElementById("speedSlider");
+                            if(sp){ const val = parseInt(sp.value); const tbl=[0,4,8,12,15]; sendCmd("c"+String(tbl[val]).padStart(2,"0")); }
+                            debugLog("🎮 操作可能");
+                        }
+                    },500);
+                }catch(e){ if(!e.message.includes("cancel")) debugLog("❌ "+e.message, true); updateBitUI(false); }
+            }
+            function disconnectBit(){
+                if(device && device.gatt?.connected) device.gatt.disconnect();
+                connected=false; writeChar=null; updateBitUI(false); queue=[];
+                debugLog("micro:bit切断");
+            }
+            
+            connectBitBtn.onclick = connectBit;
+            disconnectBitBtn.onclick = disconnectBit;
+            emergencyStopBtn.onclick = emergency;
+            
+            // ===== 操作バインド =====
+            function bindPad(dir, press, release){
+                const btn = document.querySelector(`[data-dir="${dir}"]`);
+                if(!btn) return;
+                let iv=null, pressing=false;
+                const start = ()=>{
+                    if(!connected || pressing) return;
+                    pressing=true;
+                    sendCmd(press);
+                    iv = setInterval(()=>{ if(connected && pressing) sendCmd(press); else stop(); }, 150);
+                };
+                const stop = ()=>{
+                    if(!pressing) return;
+                    pressing=false;
+                    if(iv) clearInterval(iv);
+                    if(connected) sendCmd(release);
+                };
+                btn.addEventListener("mousedown", start);
+                btn.addEventListener("mouseup", stop);
+                btn.addEventListener("mouseleave", stop);
+                btn.addEventListener("touchstart", start, {passive:false});
+                btn.addEventListener("touchend", stop);
+            }
+            bindPad("UP","UP","up");
+            bindPad("DOWN","DOWN","down");
+            bindPad("LEFT","LEFT","left");
+            bindPad("RIGHT","RIGHT","right");
+            document.querySelector('[data-dir="STOP"]')?.addEventListener("click",()=>emergency());
+            
+            let spdTimer=null, lastSpd="";
+            function sendSpeed(v){
+                if(!connected) return;
+                const lvl=parseInt(v);
+                const tbl=[0,4,8,12,15];
+                const cmd="c"+String(tbl[lvl]).padStart(2,"0");
+                if(cmd===lastSpd) return;
+                lastSpd=cmd;
+                sendCmd(cmd);
+            }
+            const spSlider = document.getElementById("speedSlider");
+            const spVal = document.getElementById("speedValue");
+            if(spSlider){
+                spSlider.addEventListener("input",(e)=>{
+                    spVal.textContent = e.target.value;
+                    if(spdTimer) clearTimeout(spdTimer);
+                    spdTimer = setTimeout(()=> sendSpeed(e.target.value), 100);
+                });
+            }
+            
+            updateBitUI(false);
+            debugLog("✅ FPV Controller 起動");
+            if(!navigator.bluetooth) debugLog("❌ Web Bluetooth未対応", true);
+            if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+        })();
+    </script>
+</body>
+</html>
